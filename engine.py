@@ -128,35 +128,41 @@ client = OpenAI(
 )
 
 
-def process_pdf(uploaded_file):
+def process_pdfs(uploaded_files):
+    all_chunks = []
+    
+    for uploaded_file in uploaded_files:
+        # 1. Save each uploaded pdf temporarily
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+            tmp.write(uploaded_file.read())
+            pdf_path = tmp.name
 
-    # Save uploaded pdf temporarily
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+        # 2. Load PDF
+        loader = PyPDFLoader(pdf_path)
+        documents = loader.load()
+        
+        # 3. Add filename metadata to help identify sources later
+        for doc in documents:
+            doc.metadata["source_name"] = uploaded_file.name
 
-        tmp.write(uploaded_file.read())
+        # 4. Split into chunks
+        splitter = RecursiveCharacterTextSplitter(
+            chunk_size=350,
+            chunk_overlap=50
+        )
+        chunks = splitter.split_documents(documents)
+        all_chunks.extend(chunks)
+        
+        # Clean up temporary file
+        os.remove(pdf_path)
 
-        pdf_path = tmp.name
-
-    # Load PDF
-    loader = PyPDFLoader(pdf_path)
-
-    documents = loader.load()
-
-    # Split into chunks
-    splitter = RecursiveCharacterTextSplitter(
-        chunk_size=350,
-        chunk_overlap=50
-    )
-
-    chunks = splitter.split_documents(documents)
-
-    # Create Vector Database
+    # 5. Create Vector Database from all combined chunks
     db = FAISS.from_documents(
-        chunks,
+        all_chunks,
         embedding_model
     )
-
     return db
+
 
 
 def ask_question(db, question):
@@ -209,14 +215,15 @@ Question:
     answer = response.choices[0].message.content
 
     sources = []
-
     for doc in results:
-
         sources.append(
             {
+                # Extract filename from metadata
+                "source": doc.metadata.get("source_name", "Unknown File"),
                 "page": doc.metadata["page"] + 1,
                 "content": doc.page_content[:150]
             }
         )
+
 
     return answer, sources
